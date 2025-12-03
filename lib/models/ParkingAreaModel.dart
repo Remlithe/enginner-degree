@@ -1,23 +1,24 @@
+// lib/models/parkingareamodel.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:latlong2/latlong.dart'; 
+import 'package:latlong2/latlong.dart'; // <--- TO JEST POPRAWNY IMPORT DLA OPENSTREETMAP
 
 class ParkingAreaModel {
-  final String id; // ID dokumentu w Firestore
-  final String ownerUid; // ID właściciela tego obszaru
+  final String id;
+  final String ownerUid;
+  final String name;
   final String address;
-  final LatLng location; // Szerokość i długość geograficzna
+  final LatLng location; // Teraz to jest LatLng z paczki latlong2
   final double pricePerHour;
   
-  // KLUCZOWE ZMIANY: pojemność i zajęte miejsca
-  final int totalCapacity; // Całkowita liczba miejsc na tym obszarze
-  final int occupiedSpots; // Aktualnie zajęte miejsca (kontrolowane przez Właściciela i Rezerwacje)
-
+  final int totalCapacity;
+  final int occupiedSpots;
   final String? description;
-  final List<String> features; // Zamiast bool, użyjmy listy cech (np. ['24/7', 'EV', 'Ochrona'])
+  final List<String> features;
 
   ParkingAreaModel({
     required this.id,
     required this.ownerUid,
+    required this.name,
     required this.address,
     required this.location,
     required this.pricePerHour,
@@ -27,33 +28,33 @@ class ParkingAreaModel {
     this.features = const [],
   });
 
-  // Czy są wolne miejsca? Uproszczona logika dla Klienta
-  bool get isAvailable {
-    return occupiedSpots < totalCapacity;
-  }
-  
-  // Metoda do tworzenia obiektu z danych Firestore
+  bool get isAvailable => occupiedSpots < totalCapacity;
+
   factory ParkingAreaModel.fromFirestore(Map<String, dynamic> data, String documentId) {
+    // Pobieramy GeoPoint z Firebase
     GeoPoint geoPoint = data['location'] as GeoPoint;
     
     return ParkingAreaModel(
       id: documentId,
       ownerUid: data['ownerUid'] ?? '',
+      name: data['name'] ?? 'Parking Bez Nazwy',
       address: data['address'] ?? 'Nieznany adres',
+      // Konwersja: Firebase GeoPoint -> latlong2 LatLng
       location: LatLng(geoPoint.latitude, geoPoint.longitude),
       pricePerHour: (data['pricePerHour'] as num?)?.toDouble() ?? 0.0,
-      totalCapacity: data['totalCapacity'] ?? 1, // Domyślnie 1, jeśli brak
+      totalCapacity: data['totalCapacity'] ?? 1,
       occupiedSpots: data['occupiedSpots'] ?? 0,
       description: data['description'],
       features: List<String>.from(data['features'] ?? []),
     );
   }
   
-  // Metoda do konwersji obiektu na dane do zapisania w Firestore
   Map<String, dynamic> toFirestore() {
     return {
       'ownerUid': ownerUid,
+      'name': name,
       'address': address,
+      // Konwersja: latlong2 LatLng -> Firebase GeoPoint
       'location': GeoPoint(location.latitude, location.longitude),
       'pricePerHour': pricePerHour,
       'totalCapacity': totalCapacity,

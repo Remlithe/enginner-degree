@@ -42,7 +42,7 @@ class AuthService {
       }
       return null;
     } on FirebaseAuthException catch (e) {
-      throw e; 
+      rethrow; 
     }
   }
 

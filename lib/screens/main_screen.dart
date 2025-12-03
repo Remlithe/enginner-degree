@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'parking_screen.dart'; // To jest Twój ekran z żółtym guzikiem
 import '../services/auth_service.dart';
+import 'map_screen.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -33,19 +34,8 @@ class _MainScreenState extends State<MainScreen> {
       // 0. PARKOWANIE (Twój gotowy ekran)
       ParkingScreen(onFindParking: _goToMapPlaceholder),
 
-      // 1. ZAMIAST MAPY -> PUSTY EKRAN (Placeholder)
-      const Scaffold(
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.map, size: 100, color: Colors.grey),
-              SizedBox(height: 20),
-              Text("Tu kiedyś będzie mapa"),
-            ],
-          ),
-        ),
-      ),
+      const MapScreen(),
+      
 
       // 2. PROFIL (Z opcją wylogowania, żebyś nie utknął)
       Scaffold(
