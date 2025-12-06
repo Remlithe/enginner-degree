@@ -8,24 +8,22 @@ class ParkingService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  // 1. Pobierz listę wszystkich parkingów
+  // 1. Pobierz listę
   Stream<List<ParkingAreaModel>> getParkingAreas() {
     return _db.collection('parking_spots').snapshots().map((snapshot) {
       return snapshot.docs.map((doc) {
-        // NAPRAWA: Rzutowanie na Map<String, dynamic>
         return ParkingAreaModel.fromFirestore(
-          doc.data() as Map<String, dynamic>, 
+          doc.data(), // Firebase zwraca Map<String, dynamic>
           doc.id
         );
       }).toList();
     });
   }
 
-  // 2. Pobierz listę ID ulubionych
+  // 2. Ulubione
   Stream<List<String>> getUserFavorites() {
     final user = _auth.currentUser;
     if (user == null) return Stream.value([]);
-
     return _db.collection('users').doc(user.uid).snapshots().map((snapshot) {
       if (snapshot.exists && snapshot.data()!.containsKey('favorites')) {
         return List<String>.from(snapshot.data()!['favorites']);
@@ -34,54 +32,50 @@ class ParkingService {
     });
   }
 
-  // 3. Dodaj/Usuń z ulubionych
+  // 3. Toggle Favorite
   Future<void> toggleFavorite(String parkingId) async {
     final user = _auth.currentUser;
     if (user == null) return;
-
     DocumentReference userDoc = _db.collection('users').doc(user.uid);
     DocumentSnapshot doc = await userDoc.get();
-
     List<String> currentFavs = [];
     if (doc.exists && (doc.data() as Map).containsKey('favorites')) {
       currentFavs = List<String>.from(doc['favorites']);
     }
-
     if (currentFavs.contains(parkingId)) {
       currentFavs.remove(parkingId);
     } else {
       currentFavs.add(parkingId);
     }
-
     await userDoc.update({'favorites': currentFavs});
   }
 
-  // 4. Oblicz dystans
+  // 4. Dystans (Matematyka jest ta sama)
   double calculateDistance(double startLat, double startLng, double endLat, double endLng) {
     return Geolocator.distanceBetween(startLat, startLng, endLat, endLng);
   }
 
-  // 5. Dodaj dane testowe
+  // 5. Dane testowe (SEED DATA) - Przywracamy, bo ParkingScreen tego używa
   Future<void> seedData() async {
     CollectionReference spots = _db.collection('parking_spots');
     await spots.add({
-      'ownerUid': 'system',
+      'ownerUid': 'test_system',
       'name': 'Galeria Mokotów',
-      'address': 'Wołoska 12',
-      'location': const GeoPoint(52.1800, 21.0000),
+      'address': 'Wołoska 12, Warszawa',
+      'location': const GeoPoint(52.1800, 21.0000), 
       'pricePerHour': 0.0,
       'totalCapacity': 500,
-      'occupiedSpots': 100,
-      'features': ['24/7'],
+      'occupiedSpots': 120,
+      'features': ['24/7', 'Kryty'],
     });
-     await spots.add({
-      'ownerUid': 'system',
-      'name': 'Centrum',
-      'address': 'Marszałkowska 1',
+    await spots.add({
+      'ownerUid': 'test_system',
+      'name': 'Parking Centralny',
+      'address': 'Marszałkowska 100, Warszawa',
       'location': const GeoPoint(52.2297, 21.0122),
-      'pricePerHour': 5.0,
+      'pricePerHour': 5.5,
       'totalCapacity': 50,
-      'occupiedSpots': 10,
+      'occupiedSpots': 48,
       'features': ['Ochrona'],
     });
   }

@@ -1,1 +1,42 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"parkcheck-app","appId":"1:876442856362:android:812165d8c701a57e7959d3","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"parkcheck-app","configurations":{"android":"1:876442856362:android:812165d8c701a57e7959d3","ios":"1:876442856362:ios:e8565348958763ea7959d3","macos":"1:876442856362:ios:e8565348958763ea7959d3","web":"1:876442856362:web:6f8fc1e64c74da747959d3","windows":"1:876442856362:web:a46d51c2e3938a027959d3"}}}}}}
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "parkcheck-app",
+          "appId": "1:876442856362:android:812165d8c701a57e7959d3",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "parkcheck-app",
+          "configurations": {
+            "android": "1:876442856362:android:812165d8c701a57e7959d3",
+            "ios": "1:876442856362:ios:e8565348958763ea7959d3",
+            "macos": "1:876442856362:ios:e8565348958763ea7959d3",
+            "web": "1:876442856362:web:6f8fc1e64c74da747959d3",
+            "windows": "1:876442856362:web:a46d51c2e3938a027959d3"
+          }
+        }
+      }
+    }
+  },
+  "functions": [
+    {
+      "codebase": "default",
+      "disallowLegacyRuntimeConfig": true,
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local"
+      ],
+      "predeploy": [
+        "npm --prefix \"$RESOURCE_DIR\" run lint"
+      ],
+      "source": "functions"
+    }
+  ]
+}

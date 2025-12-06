@@ -1,7 +1,12 @@
 // lib/screens/main_screen.dart
 import 'package:flutter/material.dart';
 import 'parking_screen.dart'; // To jest Twój ekran z żółtym guzikiem
+<<<<<<< HEAD
 import '../services/auth_service.dart';
+=======
+import 'map_screen.dart';
+import 'profile_screen.dart';
+>>>>>>> feature/google-maps
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -48,16 +53,7 @@ class _MainScreenState extends State<MainScreen> {
       ),
 
       // 2. PROFIL (Z opcją wylogowania, żebyś nie utknął)
-      Scaffold(
-        body: Center(
-          child: ElevatedButton(
-            onPressed: () {
-              AuthService().signOut();
-            },
-            child: const Text('WYLOGUJ SIĘ'),
-          ),
-        ),
-      ),
+      const ProfileScreen(),
     ];
 
     return Scaffold(

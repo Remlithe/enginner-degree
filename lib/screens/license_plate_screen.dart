@@ -1,9 +1,8 @@
 // lib/screens/license_plate_screen.dart
 import 'package:flutter/material.dart';
-import '../services/auth_service.dart';
+import 'payment_setup_screen.dart'; // Upewnij się, że masz ten import
 
 class LicensePlateScreen extends StatefulWidget {
-  // Pola, które otrzymujemy z poprzedniego ekranu
   final String firstName;
   final String lastName;
   final String email;
@@ -23,10 +22,8 @@ class LicensePlateScreen extends StatefulWidget {
 
 class _LicensePlateScreenState extends State<LicensePlateScreen> {
   final TextEditingController _plateController = TextEditingController();
-  final AuthService _authService = AuthService();
-  bool _isLoading = false;
 
-  void _finishRegistration() async {
+  void _goToPaymentStep() {
     if (_plateController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Podaj numer rejestracyjny.')),
@@ -34,45 +31,23 @@ class _LicensePlateScreenState extends State<LicensePlateScreen> {
       return;
     }
 
-    setState(() {
-      _isLoading = true;
-    });
-
-    try {
-      // TU DOPIERO REJESTRUJEMY W FIREBASE
-      // Używamy danych z widget.email, widget.password itp.
-      await _authService.registerWithEmailPassword(
-        email: widget.email,
-        password: widget.password,
+    // --- KLUCZOWA ZMIANA ---
+    // Nie rejestrujemy tu użytkownika! Tylko przechodzimy dalej.
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (context) => PaymentSetupScreen(
         firstName: widget.firstName,
         lastName: widget.lastName,
+        email: widget.email,
+        password: widget.password,
         licensePlate: _plateController.text.trim().toUpperCase(),
-      );
-
-      // Sukces! Cofamy wszystko do początku (AuthGate i tak nas przeniesie na Home)
-      if (mounted) {
-        Navigator.of(context).popUntil((route) => route.isFirst);
-      }
-      
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Błąd rejestracji: ${e.toString()}')),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
-    }
+      ),
+    ));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Krok 2/2: Twój Pojazd')),
+      appBar: AppBar(title: const Text('Krok 2/3: Twój Pojazd')),
       body: Padding(
         padding: const EdgeInsets.all(24.0),
         child: Column(
@@ -84,7 +59,6 @@ class _LicensePlateScreenState extends State<LicensePlateScreen> {
             ),
             const SizedBox(height: 32),
             
-            // POLE NUMERU REJESTRACYJNEGO
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
@@ -104,15 +78,14 @@ class _LicensePlateScreenState extends State<LicensePlateScreen> {
               ),
             ),
             
-            const SizedBox(height: 32),
+            const Spacer(),
             
-            _isLoading
-                ? const CircularProgressIndicator()
-                : ElevatedButton(
-                    onPressed: _finishRegistration,
-                    style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(50)),
-                    child: const Text('ZAKOŃCZ I ZAREJESTRUJ', style: TextStyle(fontSize: 18)),
-                  ),
+            ElevatedButton(
+              onPressed: _goToPaymentStep,
+              style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(50)),
+              child: const Text('DALEJ', style: TextStyle(fontSize: 18)),
+            ),
+            const SizedBox(height: 20),
           ],
         ),
       ),

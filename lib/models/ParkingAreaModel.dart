@@ -1,6 +1,10 @@
 // lib/models/parkingareamodel.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
+<<<<<<< HEAD
 import 'package:google_maps_flutter/google_maps_flutter.dart'; // <--- WRACAMY DO GOOGLE
+=======
+import 'package:google_maps_flutter/google_maps_flutter.dart'; // <--- TO JEST POPRAWNY IMPORT DLA OPENSTREETMAP
+>>>>>>> feature/google-maps
 
 class ParkingAreaModel {
   final String id;
