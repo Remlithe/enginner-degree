@@ -13,38 +13,46 @@ class AuthService {
   }
   
   // 1. Rejestracja nowego Klienta
-  Future<UserModel?> registerWithEmailPassword({
-    required String email,
-    required String password,
-    required String firstName,
-    required String lastName,
-    required String licensePlate, // <--- DODAJ ARGUMENT
-  }) async {
-    try {
-      UserCredential result = await _firebaseAuth.createUserWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
-      User? user = result.user;
-      
-      if (user != null) {
-        final newUser = UserModel(
-          uid: user.uid,
-          email: email,
-          firstName: firstName,
-          lastName: lastName,
-          licensePlate: licensePlate, // <--- ZAPISUJEMY
-          isOwner: false,
-        );
+  // lib/services/auth_service.dart (fragment metody rejestracji)
 
-        await _firestore.collection('users').doc(user.uid).set(newUser.toFirestore());
-        return newUser;
-      }
-      return null;
-    } on FirebaseAuthException catch (e) {
-      rethrow; 
-    }
+  Future<UserModel?> registerWithEmailPassword({
+  required String email,
+  required String password,
+  required String firstName,
+  required String lastName,
+  required String licensePlate,
+  required String stripeCustomerId,
+  required String paymentMethodId,
+  required String cardLast4,
+}) async {
+  try {
+    // Create the user with Firebase Auth
+    final userCredential = await _firebaseAuth.createUserWithEmailAndPassword(
+      email: email,
+      password: password,
+    );
+    
+    // Create a user model
+    final user = UserModel(
+      uid: userCredential.user!.uid,
+      email: email,
+      firstName: firstName,
+      lastName: lastName,
+      licensePlate: licensePlate,
+      stripeCustomerId: stripeCustomerId,
+      paymentMethodId: paymentMethodId,
+      cardLast4: cardLast4,
+    );
+    
+    // Save the user data to Firestore
+    await _firestore.collection('users').doc(user.uid).set(user.toJson());
+    
+    return user;
+  } catch (e) {
+    print('Error registering user: $e');
+    return null;
   }
+}
 
   // 2. Logowanie istniejącego Klienta/Właściciela
   Future<UserModel?> signInWithEmailPassword({

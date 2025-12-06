@@ -20,6 +20,7 @@ android {
 
     kotlinOptions {
         jvmTarget = JavaVersion.VERSION_11.toString()
+        freeCompilerArgs = listOf("-Xlint:deprecation")
     }
 
     defaultConfig {
@@ -31,6 +32,7 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        multiDexEnabled = true
     }
 
     buildTypes {
@@ -38,7 +40,19 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            
         }
+    }
+
+    buildFeatures {
+        viewBinding = true
+    }
+
+    dependencies {
+    // Add these Stripe dependencies
+    implementation("com.stripe:stripe-android:20.25.+")
+    implementation("com.stripe:stripe-core:20.25.+")
+    // Keep any existing dependencies
     }
 }
 

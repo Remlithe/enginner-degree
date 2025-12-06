@@ -39,7 +39,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Krok 1/2: Dane Osobowe')),
+      appBar: AppBar(title: const Text('Krok 1/3: Dane Osobowe')),
       body: Padding(
         padding: const EdgeInsets.all(24.0),
         child: SingleChildScrollView( // Dodane, żeby klawiatura nie zasłaniała
