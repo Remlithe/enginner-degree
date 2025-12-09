@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'parking_screen.dart'; // To jest Twój ekran z żółtym guzikiem
 import 'map_screen.dart';
 import 'profile_screen.dart';
+import 'favorites_screen.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -36,6 +37,7 @@ class _MainScreenState extends State<MainScreen> {
 
       const MapScreen(),
       
+      const FavoritesScreen(),
 
       // 2. PROFIL (Z opcją wylogowania, żebyś nie utknął)
       const ProfileScreen(),
@@ -56,6 +58,10 @@ class _MainScreenState extends State<MainScreen> {
           BottomNavigationBarItem(
             icon: Icon(Icons.map),
             label: 'Mapa',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.favorite), // Serduszko
+            label: 'Ulubione',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.person),

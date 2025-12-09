@@ -11,7 +11,22 @@ class AuthService {
   Stream<User?> get user {
     return _firebaseAuth.authStateChanges();
   }
-  
+  Future<bool> checkEmailExists(String email) async {
+    try {
+      // Szukamy w kolekcji 'users' dokumentu, gdzie pole 'email' jest równe podanemu
+      final result = await _firestore
+          .collection('users')
+          .where('email', isEqualTo: email)
+          .limit(1) // Wystarczy, że znajdziemy jeden
+          .get();
+
+      // Jeśli lista dokumentów nie jest pusta, to znaczy, że email jest zajęty
+      return result.docs.isNotEmpty;
+    } catch (e) {
+      print("Błąd sprawdzania emaila: $e");
+      return false; // W razie błędu zakładamy, że wolny (Auth i tak zablokuje później)
+    }
+  }
   // 1. Rejestracja nowego Klienta
   // lib/services/auth_service.dart (fragment metody rejestracji)
 

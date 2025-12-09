@@ -1,6 +1,7 @@
 // lib/screens/license_plate_screen.dart
 import 'package:flutter/material.dart';
-import 'payment_setup_screen.dart'; // Upewnij się, że masz ten import
+import 'payment_setup_screen.dart';
+import '../widgets/license_plate_input.dart';
 
 class LicensePlateScreen extends StatefulWidget {
   final String firstName;
@@ -23,23 +24,60 @@ class LicensePlateScreen extends StatefulWidget {
 class _LicensePlateScreenState extends State<LicensePlateScreen> {
   final TextEditingController _plateController = TextEditingController();
 
+  // Funkcja sprawdzająca format rejestracji
+  bool _isPlateValid(String plate) {
+    // 1. Usuwamy spacje i myślniki, zamieniamy na duże litery
+    String cleanPlate = plate.replaceAll(RegExp(r'[^A-Z0-9]'), '').toUpperCase();
+    
+    // 2. Sprawdzenie długości (Polskie tablice mają od 5 do 8 znaków, np. GDA 12345 to 8, W 12345 to 6)
+    if (cleanPlate.length < 7 || cleanPlate.length > 9) {
+      return false;
+    }
+
+    // 3. OCHRONA PRZED "PPPPPPP": Musi być przynajmniej jedna cyfra
+    // (Większość tablic, nawet indywidualnych, ma cyfry, albo chcemy unikać spamu)
+    bool hasDigit = cleanPlate.contains(RegExp(r'[0-9]'));
+    if (!hasDigit) {
+      return false; 
+    }
+
+    // 4. Sprawdzenie struktury:
+    // - Musi się zaczynać od 1-3 liter (Wyróżnik miejsca)
+    // - Potem następuje ciąg znaków (cyfry lub litery)
+    final plateRegex = RegExp(r'^[A-Z]{1,3}[A-Z0-9]{3,6}$');
+    
+    return plateRegex.hasMatch(cleanPlate);
+  }
+
   void _goToPaymentStep() {
-    if (_plateController.text.isEmpty) {
+    String plate = _plateController.text.trim().toUpperCase();
+
+    if (plate.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Podaj numer rejestracyjny.')),
       );
       return;
     }
 
-    // --- KLUCZOWA ZMIANA ---
-    // Nie rejestrujemy tu użytkownika! Tylko przechodzimy dalej.
+    // WALIDACJA FORMATU
+    if (!_isPlateValid(plate)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Błędny format rejestracji. Poprawny np: PO 12345, WA 98765'),
+          duration: Duration(seconds: 4),
+        ),
+      );
+      return;
+    }
+
+    // Przechodzimy dalej z poprawnym numerem
     Navigator.of(context).push(MaterialPageRoute(
       builder: (context) => PaymentSetupScreen(
         firstName: widget.firstName,
         lastName: widget.lastName,
         email: widget.email,
         password: widget.password,
-        licensePlate: _plateController.text.trim().toUpperCase(),
+        licensePlate: plate, // Przekazujemy sformatowany numer
       ),
     ));
   }
@@ -53,30 +91,13 @@ class _LicensePlateScreenState extends State<LicensePlateScreen> {
         child: Column(
           children: [
             const Text(
-              'Wprowadź numer rejestracyjny, abyśmy mogli automatycznie rozpoznawać Twój wjazd.',
+              'Wprowadź numer rejestracyjny (format polski).',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.grey, fontSize: 16),
             ),
             const SizedBox(height: 32),
             
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.blue, width: 2),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: TextField(
-                controller: _plateController,
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, letterSpacing: 4),
-                decoration: const InputDecoration(
-                  border: InputBorder.none,
-                  hintText: 'PO 12345',
-                  hintStyle: TextStyle(color: Colors.black12, letterSpacing: 4),
-                ),
-                textCapitalization: TextCapitalization.characters,
-              ),
-            ),
+            LicensePlateInput(controller: _plateController),
             
             const Spacer(),
             
