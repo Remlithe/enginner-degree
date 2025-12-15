@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart'; // Do nawigacji
-import '../models/parkingareamodel.dart';
+import '../models/parking_area_model.dart';
 import '../services/parking_service.dart';
 
 class MapScreen extends StatefulWidget {

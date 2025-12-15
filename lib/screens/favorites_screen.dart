@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../models/parkingareamodel.dart';
+import '../models/parking_area_model.dart';
 import '../services/parking_service.dart';
 import '../widgets/occupancy_bar.dart'; // Import paska, który stworzyliśmy
 

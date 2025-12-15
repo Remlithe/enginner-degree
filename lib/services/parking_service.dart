@@ -2,7 +2,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
-import '../models/parkingareamodel.dart'; 
+import '../models/parking_area_model.dart'; 
 
 class ParkingService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;

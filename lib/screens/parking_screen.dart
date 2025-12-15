@@ -2,9 +2,9 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:geolocator/geolocator.dart'; 
+import 'package:geolocator/geolocator.dart'; // <--- Potrzebne do GPS
 import '../models/user_model.dart';
-import '../models/parkingareamodel.dart'; // Upewnij się co do nazwy pliku
+import '../models/parking_area_model.dart'; // Upewnij się co do wielkości liter pliku!
 import '../services/parking_service.dart';
 
 class ParkingScreen extends StatefulWidget {
@@ -20,12 +20,63 @@ class _ParkingScreenState extends State<ParkingScreen> {
   final User? currentUser = FirebaseAuth.instance.currentUser;
   final ParkingService _parkingService = ParkingService();
 
-  // Symulowana pozycja (Warszawa Centrum) - docelowo użyj Geolocator.getCurrentPosition()
-  final double myLat = 52.2297;
-  final double myLng = 21.0122;
-  
-  // Czy jesteśmy blisko jakiegoś parkingu (na razie false)
-  bool isNearParking = false; 
+  // ZMIANA: Zamiast "na sztywno", używamy zmiennej, która może być null
+  Position? _currentPosition;
+  bool _isLoadingLocation = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _determinePosition(); // <--- Pobieramy lokalizację na starcie
+  }
+
+  // Funkcja pobierająca prawdziwą lokalizację
+  Future<void> _determinePosition() async {
+    bool serviceEnabled;
+    LocationPermission permission;
+
+    // 1. Sprawdź czy GPS jest włączony
+    serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      if (mounted) {
+        setState(() => _isLoadingLocation = false);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Włącz GPS, aby znaleźć najbliższe parkingi.')));
+      }
+      return;
+    }
+
+    // 2. Sprawdź uprawnienia
+    permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        if (mounted) {
+          setState(() => _isLoadingLocation = false);
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Brak uprawnień do lokalizacji.')));
+        }
+        return;
+      }
+    }
+
+    if (permission == LocationPermission.deniedForever) {
+      if (mounted) setState(() => _isLoadingLocation = false);
+      return;
+    }
+
+    // 3. Pobierz pozycję
+    try {
+      Position position = await Geolocator.getCurrentPosition();
+      if (mounted) {
+        setState(() {
+          _currentPosition = position;
+          _isLoadingLocation = false;
+        });
+      }
+    } catch (e) {
+      print("Błąd lokalizacji: $e");
+      if (mounted) setState(() => _isLoadingLocation = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -40,58 +91,56 @@ class _ParkingScreenState extends State<ParkingScreen> {
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
-        child: StreamBuilder<List<ParkingAreaModel>>(
-          stream: _parkingService.getParkingAreas(), // 1. Strumień Parkingów
-          builder: (context, snapshotParking) {
-            return StreamBuilder<List<String>>(
-              stream: _parkingService.getUserFavorites(), // 2. Strumień Ulubionych
-              builder: (context, snapshotFavs) {
-                
-                // Obsługa ładowania
-                if (!snapshotParking.hasData || !snapshotFavs.hasData) {
-                  return const Center(child: CircularProgressIndicator());
-                }
+        child: Column(
+          children: [
+            // 1. Karta Rejestracji
+            _buildLicensePlateCard(),
+            const SizedBox(height: 16),
 
-                final allSpots = snapshotParking.data!;
-                final favIds = snapshotFavs.data!;
+            // 2. Treść Główna
+            Expanded(
+              child: _isLoadingLocation 
+                  ? const Center(child: CircularProgressIndicator()) // Czekamy na GPS
+                  : StreamBuilder<List<ParkingAreaModel>>(
+                      stream: _parkingService.getParkingAreas(),
+                      builder: (context, snapshotParking) {
+                        return StreamBuilder<List<String>>(
+                          stream: _parkingService.getUserFavorites(),
+                          builder: (context, snapshotFavs) {
+                            
+                            if (!snapshotParking.hasData || !snapshotFavs.hasData) {
+                              return const Center(child: CircularProgressIndicator());
+                            }
 
-                return Column(
-                  children: [
-                    // 1. KONTENER: NUMER REJESTRACYJNY
-                    _buildLicensePlateCard(),
-                    
-                    const SizedBox(height: 16),
-                    
-                    // 2. KONTENER: ULUBIONE (Dynamiczne)
-                    Expanded(
-                      flex: 3, 
-                      child: _buildFavoritesContainer(allSpots, favIds),
+                            final allSpots = snapshotParking.data!;
+                            final favIds = snapshotFavs.data!;
+
+                            return Column(
+                              children: [
+                                // Sekcja Ulubione
+                                Expanded(
+                                  flex: 3,
+                                  child: _buildFavoritesContainer(allSpots, favIds),
+                                ),
+                                const SizedBox(height: 16),
+                                // Sekcja Najbliższe (Teraz z prawdziwą lokalizacją!)
+                                Expanded(
+                                  flex: 4,
+                                  child: _buildNearestContainer(allSpots, favIds),
+                                ),
+                              ],
+                            );
+                          },
+                        );
+                      },
                     ),
-
-                    const SizedBox(height: 16),
-
-                    // 3. KONTENER: NAJBLIŻSZE (Dynamiczne + Sortowanie)
-                    Expanded(
-                      flex: 4, 
-                      child: _buildNearestAndButtonContainer(allSpots, favIds),
-                    ),
-                  ],
-                );
-              },
-            );
-          },
+            ),
+          ],
         ),
-      ),
-      // PRZYCISK TESTOWY (Usuń go, gdy dodasz parkingi)
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _parkingService.seedData(),
-        child: const Icon(Icons.add),
-        backgroundColor: Colors.blue,
       ),
     );
   }
 
-  // --- Widget 1: Karta Rejestracji ---
   Widget _buildLicensePlateCard() {
     return FutureBuilder<DocumentSnapshot>(
       future: FirebaseFirestore.instance.collection('users').doc(currentUser?.uid).get(),
@@ -100,10 +149,8 @@ class _ParkingScreenState extends State<ParkingScreen> {
           return const SizedBox(height: 80, child: Center(child: LinearProgressIndicator()));
         }
         
-        UserModel? user;
-        if (snapshot.hasData && snapshot.data!.data() != null) {
-          user = UserModel.fromFirestore(snapshot.data!.data() as Map<String, dynamic>);
-        }
+        final data = snapshot.data?.data() as Map<String, dynamic>?;
+        final plate = data?['licensePlate'] ?? 'BRAK';
 
         return Container(
           width: double.infinity,
@@ -118,7 +165,7 @@ class _ParkingScreenState extends State<ParkingScreen> {
               const Text('TWÓJ POJAZD', style: TextStyle(color: Colors.white70, fontSize: 12, letterSpacing: 1.5)),
               const SizedBox(height: 5),
               Text(
-                user?.licensePlate ?? 'BRAK',
+                plate,
                 style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold, letterSpacing: 2),
               ),
             ],
@@ -128,138 +175,114 @@ class _ParkingScreenState extends State<ParkingScreen> {
     );
   }
 
-  // --- Widget 2: Ulubione ---
   Widget _buildFavoritesContainer(List<ParkingAreaModel> allSpots, List<String> favIds) {
-    // Filtrujemy parkingi, które są na liście ulubionych
     final favSpots = allSpots.where((s) => favIds.contains(s.id)).toList();
 
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(15),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade300),
-      ),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: const [
-              Icon(Icons.favorite, color: Colors.red),
-              SizedBox(width: 10),
-              Text('Ulubione Parkingi', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-            ],
-          ),
+          const Row(children: [
+            Icon(Icons.favorite, color: Colors.red), 
+            SizedBox(width: 10), 
+            Text('Ulubione Parkingi', style: TextStyle(fontWeight: FontWeight.bold))
+          ]),
           const SizedBox(height: 10),
-          
-          favSpots.isEmpty
-            ? Expanded(
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.favorite_border, size: 40, color: Colors.grey.shade300),
-                      const SizedBox(height: 10),
-                      const Text('Nie masz polubionych parkingów', style: TextStyle(color: Colors.grey)),
-                    ],
-                  ),
-                ),
-              )
-            : Expanded(
-                child: ListView.builder(
-                  itemCount: favSpots.length,
-                  itemBuilder: (context, index) {
-                    final spot = favSpots[index];
-                    return ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(spot.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                      subtitle: Text(spot.address),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.favorite, color: Colors.red),
-                        onPressed: () => _parkingService.toggleFavorite(spot.id),
-                      ),
-                    );
-                  },
-                ),
+          if (favSpots.isEmpty)
+             const Expanded(child: Center(child: Text("Brak ulubionych.")))
+          else
+            Expanded(
+              child: ListView.builder(
+                itemCount: favSpots.length,
+                itemBuilder: (context, index) {
+                  final spot = favSpots[index];
+                  return ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(spot.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                    subtitle: Text(spot.address),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.favorite, color: Colors.red),
+                      onPressed: () => _parkingService.toggleFavorite(spot.id),
+                    ),
+                  );
+                },
               ),
+            )
         ],
       ),
     );
   }
 
-  // --- Widget 3: Najbliższe + Guzik ---
-  Widget _buildNearestAndButtonContainer(List<ParkingAreaModel> allSpots, List<String> favIds) {
-    // 1. Sortuj według odległości
-    allSpots.sort((a, b) {
-      double distA = _parkingService.calculateDistance(myLat, myLng, a.location.latitude, a.location.longitude);
-      double distB = _parkingService.calculateDistance(myLat, myLng, b.location.latitude, b.location.longitude);
-      return distA.compareTo(distB);
-    });
-
-    // 2. Weź 5 najbliższych
+  Widget _buildNearestContainer(List<ParkingAreaModel> allSpots, List<String> favIds) {
+    // Jeśli nie mamy lokalizacji (np. błąd lub brak zgody), nie sortujemy albo używamy domyślnej
+    if (_currentPosition != null) {
+      allSpots.sort((a, b) {
+        double distA = _parkingService.calculateDistance(
+          _currentPosition!.latitude, _currentPosition!.longitude, 
+          a.location.latitude, a.location.longitude
+        );
+        double distB = _parkingService.calculateDistance(
+          _currentPosition!.latitude, _currentPosition!.longitude, 
+          b.location.latitude, b.location.longitude
+        );
+        return distA.compareTo(distB);
+      });
+    }
+    
     final nearest = allSpots.take(5).toList();
 
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(15),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade300),
-      ),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('W pobliżu', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          const Text('W pobliżu', style: TextStyle(fontWeight: FontWeight.bold)),
           const SizedBox(height: 10),
           
-          Expanded(
-            child: ListView.builder(
-              itemCount: nearest.length,
-              itemBuilder: (context, index) {
-                final spot = nearest[index];
-                double km = _parkingService.calculateDistance(myLat, myLng, spot.location.latitude, spot.location.longitude) / 1000;
-                bool isFav = favIds.contains(spot.id);
+          if (_currentPosition == null)
+            const Expanded(child: Center(child: Text("Brak lokalizacji")))
+          else
+            Expanded(
+              child: ListView.builder(
+                itemCount: nearest.length,
+                itemBuilder: (context, index) {
+                  final spot = nearest[index];
+                  double km = _parkingService.calculateDistance(
+                    _currentPosition!.latitude, _currentPosition!.longitude, 
+                    spot.location.latitude, spot.location.longitude
+                  ) / 1000;
+                  
+                  bool isFav = favIds.contains(spot.id);
 
-                return ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(8)),
-                    child: const Icon(Icons.local_parking, color: Colors.blue),
-                  ),
-                  title: Text(spot.name),
-                  subtitle: Text("${km.toStringAsFixed(1)} km • ${spot.pricePerHour} zł/h"),
-                  trailing: IconButton(
-                    icon: Icon(isFav ? Icons.favorite : Icons.favorite_border, color: isFav ? Colors.red : Colors.grey),
-                    onPressed: () => _parkingService.toggleFavorite(spot.id),
-                  ),
-                );
-              },
+                  return ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.local_parking, color: Colors.blue),
+                    title: Text(spot.name),
+                    // Wyświetlamy dystans z dokładnością do 1 miejsca po przecinku
+                    subtitle: Text("${km.toStringAsFixed(1)} km • ${spot.pricePerHour} zł/h"),
+                    trailing: IconButton(
+                      icon: Icon(isFav ? Icons.favorite : Icons.favorite_border, color: isFav ? Colors.red : Colors.grey),
+                      onPressed: () => _parkingService.toggleFavorite(spot.id),
+                    ),
+                  );
+                },
+              ),
             ),
-          ),
           
           const SizedBox(height: 10),
-          
-          // --- GUZIK (Logika się nie zmienia) ---
           SizedBox(
             width: double.infinity,
-            height: 50,
             child: ElevatedButton(
-              onPressed: isNearParking ? () { print("Start!"); } : null,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blue, 
-                disabledBackgroundColor: Colors.yellow[700], 
-                disabledForegroundColor: Colors.black,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-              child: Text(
-                isNearParking ? 'ROZPOCZNIJ PARKOWANIE' : 'NIE JESTEŚ W POBLIŻU PARKINGU',
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
+              onPressed: widget.onFindParking,
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.blue, foregroundColor: Colors.white),
+              child: const Text('ZOBACZ NA MAPIE'),
             ),
-          ),
+          )
         ],
       ),
     );
