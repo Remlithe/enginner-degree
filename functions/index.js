@@ -1,5 +1,5 @@
 /* eslint-disable max-len */
-const {onCall} = require("firebase-functions/v2/https");
+const {onCall, HttpsError} = require("firebase-functions/v2/https");
 const {defineSecret} = require("firebase-functions/params");
 const admin = require("firebase-admin");
 
@@ -60,5 +60,61 @@ exports.createCustomer = onCall({secrets: [stripeKey]}, async (request) => {
   } catch (error) {
     console.error("Error creating customer:", error);
     throw new Error(error.message);
+  }
+});
+exports.createPaymentIntent = onCall({secrets: [stripeKey]}, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Musisz być zalogowany.");
+  }
+
+  const stripe = require("stripe")(stripeKey.value());
+  // Odbieramy dane. WAŻNE: Odbieramy 'email', bo telefon go wysyła
+  const {amount, currency, ownerStripeId, email, customerId: paramCustomerId} = request.data;
+
+  try {
+    let finalCustomerId = paramCustomerId;
+
+    // JEŚLI TELEFON WYSŁAŁ EMAIL, A NIE ID -> ZNAJDŹ ID W STRIPE
+    if (!finalCustomerId && email) {
+      const existingCustomers = await stripe.customers.list({email: email, limit: 1});
+      if (existingCustomers.data.length > 0) {
+        finalCustomerId = existingCustomers.data[0].id;
+      } else {
+        const newCustomer = await stripe.customers.create({email: email});
+        finalCustomerId = newCustomer.id;
+      }
+    }
+
+    if (!finalCustomerId) {
+      throw new HttpsError("invalid-argument", "Brak ID klienta (customerId) lub Emaila.");
+    }
+
+    // A. Klucz tymczasowy (wymagany przez aplikację)
+    const ephemeralKey = await stripe.ephemeralKeys.create(
+        {customer: finalCustomerId}, // <-- Teraz to na pewno nie będzie puste
+        {apiVersion: "2023-10-16"},
+    );
+
+    // B. Płatność (z transferem do Ownera)
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: amount,
+      currency: currency || "usd",
+      customer: finalCustomerId,
+      transfer_data: {
+        destination: ownerStripeId,
+      },
+      on_behalf_of: ownerStripeId,
+      application_fee_amount: Math.round(amount * 0.1),
+      automatic_payment_methods: {enabled: true},
+    });
+
+    return {
+      paymentIntent: paymentIntent.client_secret,
+      ephemeralKey: ephemeralKey.secret,
+      customer: finalCustomerId,
+    };
+  } catch (error) {
+    console.error("Stripe Error:", error);
+    throw new HttpsError("internal", error.message);
   }
 });
