@@ -72,7 +72,7 @@ class LicensePlateInput extends StatelessWidget {
                 ),
                 decoration: const InputDecoration(
                   border: InputBorder.none,
-                  hintText: 'PO 12345',
+                  hintText: 'NP. PO 12345',
                   hintStyle: TextStyle(color: Colors.black26),
                   counterText: "",
                   contentPadding: EdgeInsets.zero,

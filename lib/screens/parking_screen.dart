@@ -1,11 +1,12 @@
 import 'dart:async';
+import 'dart:ui'; 
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
-// Ukrywamy 'Card' ze Stripe, żeby nie gryzło się z Flutterem
 import 'package:flutter_stripe/flutter_stripe.dart' hide Card; 
+
 import '../models/user_model.dart';
 import '../models/parking_area_model.dart';
 import '../services/parking_service.dart';
@@ -23,28 +24,26 @@ class _ParkingScreenState extends State<ParkingScreen> {
   final User? currentUser = FirebaseAuth.instance.currentUser;
   final ParkingService _parkingService = ParkingService();
 
-  // --- STANY ---
   Position? _currentPosition;
   bool _isLoadingLocation = true;
   bool _isLoadingAction = false;
   
-  // --- SESJA PARKOWANIA ---
   StreamSubscription<DocumentSnapshot>? _sessionSubscription;
   String? _activeSessionId;
   ParkingAreaModel? _activeParking;
   DateTime? _startTime;
   Timer? _timer;
+  
   String _elapsedTimeStr = "00:00:00";
   double _currentCost = 0.0;
   String _paymentStatusText = "";
-
   String _myLicensePlate = "Ładowanie...";
 
   @override
   void initState() {
     super.initState();
     _fetchUserData();
-    _determinePosition(); 
+    _determinePosition();
     _restoreActiveSession();
   }
 
@@ -55,40 +54,39 @@ class _ParkingScreenState extends State<ParkingScreen> {
     super.dispose();
   }
 
-  // --- DEBUG: PRZEWIJANIE CZASU ---
+  // --- DEBUGOWANIE ---
   void _debugAdd15Minutes() {
     if (_startTime != null) {
       setState(() {
         _startTime = _startTime!.subtract(const Duration(minutes: 15));
       });
-      // Wymuś odświeżenie licznika natychmiast
       _updateTimerLogic();
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text("Dodano 15 minut do czasu postoju (Debug)"), 
+        content: Text("DEBUG: Dodano 15 minut"), 
         duration: Duration(seconds: 1)
       ));
     }
   }
 
-  // 1. Pobierz tablicę
+  // --- LOGIKA BIZNESOWA ---
+
   void _fetchUserData() async {
     if (currentUser == null) return;
     final doc = await FirebaseFirestore.instance.collection('users').doc(currentUser!.uid).get();
     if (mounted && doc.exists) {
       setState(() {
-        _myLicensePlate = doc.data()?['licensePlate'] ?? "BRAK TABLICY";
+        _myLicensePlate = doc.data()?['licensePlate'] ?? "BRAK";
       });
     }
   }
 
-  // 2. Lokalizacja
   Future<void> _determinePosition() async {
     bool serviceEnabled;
     LocationPermission permission;
 
     serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      if(mounted) setState(() => _isLoadingLocation = false);
+      if (mounted) setState(() => _isLoadingLocation = false);
       return;
     }
 
@@ -96,13 +94,13 @@ class _ParkingScreenState extends State<ParkingScreen> {
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
-        if(mounted) setState(() => _isLoadingLocation = false);
+        if (mounted) setState(() => _isLoadingLocation = false);
         return;
       }
     }
     
     if (permission == LocationPermission.deniedForever) {
-      if(mounted) setState(() => _isLoadingLocation = false);
+      if (mounted) setState(() => _isLoadingLocation = false);
       return;
     }
 
@@ -115,31 +113,27 @@ class _ParkingScreenState extends State<ParkingScreen> {
         });
       }
 
-      Position current = await Geolocator.getCurrentPosition();
-      if (mounted) {
-        setState(() {
-          _currentPosition = current;
-          _isLoadingLocation = false;
-        });
-      }
-
-      Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 5)
-      ).listen((Position position) {
+      Geolocator.getPositionStream().listen((Position position) {
         if (mounted) {
           setState(() {
             _currentPosition = position;
+            _isLoadingLocation = false;
           });
         }
       });
-
     } catch (e) {
-      print("Błąd GPS: $e");
-      if(mounted) setState(() => _isLoadingLocation = false);
+      if (mounted) setState(() => _isLoadingLocation = false);
     }
   }
 
-  // 3. Przywracanie sesji
+  String _formatDistance(double meters) {
+    if (meters >= 1000) {
+      return "${(meters / 1000).toStringAsFixed(1)} km";
+    } else {
+      return "${meters.toInt()} m";
+    }
+  }
+
   void _restoreActiveSession() async {
     final uid = currentUser?.uid;
     if (uid == null) return;
@@ -169,9 +163,8 @@ class _ParkingScreenState extends State<ParkingScreen> {
     }
   }
 
-  // 4. Start Parkowania
   void _startParkingSession(ParkingAreaModel parking) async {
-    if (_myLicensePlate == "BRAK TABLICY") {
+    if (_myLicensePlate == "BRAK" || _myLicensePlate == "Ładowanie...") {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Uzupełnij tablicę w profilu!")));
       return;
     }
@@ -179,34 +172,80 @@ class _ParkingScreenState extends State<ParkingScreen> {
     setState(() => _isLoadingAction = true);
 
     try {
-      final ref = await FirebaseFirestore.instance.collection('parking_sessions').add({
-        'parkingId': parking.id,
-        'parkingName': parking.name,
-        'ownerId': parking.ownerUid,
-        'driverId': currentUser!.uid,
-        'licensePlate': _myLicensePlate,
-        'startTime': FieldValue.serverTimestamp(),
-        'status': 'active',
-        'cost': 0.0,
+      final firestore = FirebaseFirestore.instance;
+
+      // 1. <<< NOWOŚĆ: Sprawdź RZECZYWISTĄ liczbę aktywnych sesji przed startem >>>
+      // Ignorujemy pole 'occupiedSpots' w dokumencie parkingu, bo może być błędne (np. 8/5)
+      final activeSessionsSnapshot = await firestore
+          .collection('parking_sessions')
+          .where('parkingId', isEqualTo: parking.id)
+          .where('status', isEqualTo: 'active')
+          .get();
+
+      final int realOccupiedCount = activeSessionsSnapshot.docs.length;
+
+      if (realOccupiedCount >= parking.totalCapacity) {
+        // Jeśli jest pełny, przerywamy i wyświetlamy błąd
+        throw Exception("Parking jest pełny! (${realOccupiedCount}/${parking.totalCapacity})");
+      }
+      // -----------------------------------------------------------------------
+
+      final parkingRef = firestore.collection('parking_spots').doc(parking.id);
+      final sessionRef = firestore.collection('parking_sessions').doc();
+
+      await firestore.runTransaction((transaction) async {
+        final parkingSnapshot = await transaction.get(parkingRef);
+        
+        if (!parkingSnapshot.exists) {
+          throw Exception("Parking nie istnieje!");
+        }
+
+        // Aktualizujemy licznik w bazie (nawet jak jest zły, dodajemy +1, ale ważniejsze jest sprawdzenie wyżej)
+        int currentOccupiedInDb = parkingSnapshot.data()?['occupiedSpots'] ?? 0;
+        
+        transaction.update(parkingRef, {
+          'occupiedSpots': currentOccupiedInDb + 1
+        });
+
+        transaction.set(sessionRef, {
+          'parkingId': parking.id,
+          'parkingName': parking.name,
+          'ownerId': parking.ownerUid,
+          'driverId': currentUser!.uid,
+          'licensePlate': _myLicensePlate,
+          'startTime': FieldValue.serverTimestamp(),
+          'status': 'active',
+          'cost': 0.0,
+        });
       });
 
       setState(() {
-        _activeSessionId = ref.id;
+        _activeSessionId = sessionRef.id;
         _activeParking = parking;
         _startTime = DateTime.now();
         _paymentStatusText = "";
       });
       _startTimer();
-      _listenToSessionChanges(ref.id);
+      _listenToSessionChanges(sessionRef.id);
 
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Błąd startu: $e")));
+      // Wyświetlanie błędu (np. o pełnym parkingu)
+      String errorMsg = e.toString();
+      if (errorMsg.contains("Exception:")) {
+        errorMsg = errorMsg.replaceAll("Exception: ", "");
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(errorMsg),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        )
+      );
     } finally {
       setState(() => _isLoadingAction = false);
     }
   }
 
-  // --- NASŁUCHIWANIE ZMIAN ---
   void _listenToSessionChanges(String sessionId) {
     _sessionSubscription?.cancel();
     _sessionSubscription = FirebaseFirestore.instance
@@ -217,7 +256,6 @@ class _ParkingScreenState extends State<ParkingScreen> {
       
       if (!snapshot.exists) {
         _resetLocalSession();
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Sesja zakończona.")));
         return;
       }
 
@@ -248,10 +286,8 @@ class _ParkingScreenState extends State<ParkingScreen> {
     }
   }
 
-  // 5. Timer (LOGIKA PRZELICZANIA)
   void _startTimer() {
     _timer?.cancel();
-    // Odświeżaj co sekundę
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       _updateTimerLogic();
     });
@@ -267,17 +303,14 @@ class _ParkingScreenState extends State<ParkingScreen> {
     final m = (diff.inMinutes % 60).toString().padLeft(2, '0');
     final s = (diff.inSeconds % 60).toString().padLeft(2, '0');
 
-    // --- ZMIANA: Nalicza dopiero PO 5 minutach ---
     double cost = 0.0;
     int totalMinutes = diff.inMinutes;
-    int payableMinutes = totalMinutes - 5; // Odejmujemy 5 minut grace period
+    int payableMinutes = totalMinutes - 5; 
 
     if (payableMinutes > 0) {
-      // Płacimy tylko za czas powyżej 5 minut
       double hours = payableMinutes / 60.0;
       cost = hours * _activeParking!.pricePerHour;
     } else {
-      // W trakcie pierwszych 5 minut koszt to 0
       cost = 0.0;
     }
 
@@ -287,72 +320,118 @@ class _ParkingScreenState extends State<ParkingScreen> {
     });
   }
 
-  // 6. Stop i Płatność
   Future<void> _stopAndPay() async {
     setState(() => _isLoadingAction = true);
 
     try {
-      // (Walidacja kosztu bez zmian...)
-      if (_currentCost == 0.0) { /* ... */ return; }
-      if (_currentCost < 2.00) { throw "Za mała kwota..."; }
+      if (_currentCost == 0.0) {
+         await _finalizeSessionInDb(paid: true, isFree: true);
+         return; 
+      }
+
+      if (_currentCost < 2.00) { 
+        throw "Kwota poniżej 2 zł nie jest obsługiwana przez płatności online."; 
+      }
 
       final ownerDoc = await FirebaseFirestore.instance.collection('owners').doc(_activeParking!.ownerUid).get();
       final ownerStripeId = ownerDoc.data()?['stripeAccountId'];
       if (ownerStripeId == null) throw "Właściciel nie skonfigurował płatności";
 
-      // 1. Przygotowanie danych
       final HttpsCallable callable = FirebaseFunctions.instance.httpsCallable('createPaymentIntent');
       final int amountInGrosze = (_currentCost * 100).toInt();
-      
-      // Pobieramy e-mail zalogowanego użytkownika
       final String userEmail = currentUser?.email ?? "unknown@example.com";
 
-      // 2. Wywołanie Backend (wysyłamy email!)
       final result = await callable.call({
         'amount': amountInGrosze,
         'currency': 'pln',
         'ownerStripeId': ownerStripeId,
-        'email': userEmail, // <--- WAŻNE: Wysyłamy email, żeby znaleźć klienta
+        'email': userEmail,
       });
 
-      final data = result.data; // Odbieramy obiekt z 3 kluczami
+      final data = result.data;
 
-      // 3. Inicjalizacja Stripe z danymi Klienta
       await Stripe.instance.initPaymentSheet(paymentSheetParameters: SetupPaymentSheetParameters(
-        // Klucze płatności
         paymentIntentClientSecret: data['paymentIntent'],
-        
-        // Klucze Klienta (To uruchamia zapisane karty!)
         customerEphemeralKeySecret: data['ephemeralKey'],
         customerId: data['customer'],
-        
         merchantDisplayName: 'ParkCheck',
         style: ThemeMode.light,
-        // paymentMethodOrder: ['card'], // Możesz to usunąć, jeśli chcesz pozwolić na Apple/Google Pay
         appearance: const PaymentSheetAppearance(
           colors: PaymentSheetAppearanceColors(primary: Colors.blue),
         ),
       ));
 
-      // 4. Wyświetlenie arkusza
       await Stripe.instance.presentPaymentSheet();
       
-      // 5. Sukces - Zapis do bazy
+      // SUKCES: Jeśli kod doszedł tutaj, czyścimy ewentualne błędy w bazie
       await FirebaseFirestore.instance.collection('parking_sessions').doc(_activeSessionId).update({
-        'endTime': FieldValue.serverTimestamp(),
-        'status': 'completed',
-        'cost': _currentCost,
+        'paymentStatus': 'success', // NOWE
+        'lastError': FieldValue.delete(), // NOWE
       });
 
+      await _finalizeSessionInDb(paid: true, isFree: false);
+
     } on StripeException catch (e) {
-      setState(() {
-        _paymentStatusText = "PŁATNOŚĆ ANULOWANA";
-      });
+      // PORAŻKA STRIPE: Zapisujemy to w bazie, żeby Właściciel widział!
+      // --- NOWA SEKCJA START ---
+      if (_activeSessionId != null) {
+        FirebaseFirestore.instance.collection('parking_sessions').doc(_activeSessionId).update({
+          'paymentStatus': 'failed',
+          'lastError': 'Płatność odrzucona: ${e.error.localizedMessage}',
+          'lastAttemptTime': FieldValue.serverTimestamp(),
+        });
+      }
+      // --- NOWA SEKCJA STOP ---
+
+      if (e.error.code == FailureCode.Canceled) {
+        setState(() {
+          _paymentStatusText = "PŁATNOŚĆ ANULOWANA";
+        });
+      } else {
+        setState(() {
+          _paymentStatusText = "BŁĄD PŁATNOŚCI";
+        });
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Błąd Stripe: ${e.error.localizedMessage}")));
+      }
     } catch (e) {
+       // INNE BŁĘDY: Też możemy zapisać
+      if (_activeSessionId != null) {
+        FirebaseFirestore.instance.collection('parking_sessions').doc(_activeSessionId).update({
+          'paymentStatus': 'error',
+          'lastError': e.toString(),
+        });
+      }
+
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Błąd: $e")));
     } finally {
       if (mounted) setState(() => _isLoadingAction = false);
     }
+  }
+
+  Future<void> _finalizeSessionInDb({required bool paid, required bool isFree}) async {
+    final firestore = FirebaseFirestore.instance;
+    final parkingRef = firestore.collection('parking_spots').doc(_activeParking!.id);
+    final sessionRef = firestore.collection('parking_sessions').doc(_activeSessionId);
+
+    await firestore.runTransaction((transaction) async {
+       final parkingSnapshot = await transaction.get(parkingRef);
+
+       if (parkingSnapshot.exists) {
+         int currentOccupied = parkingSnapshot.data()?['occupiedSpots'] ?? 0;
+         int newOccupancy = currentOccupied > 0 ? currentOccupied - 1 : 0;
+         transaction.update(parkingRef, {
+           'occupiedSpots': newOccupancy
+         });
+       }
+
+       transaction.update(sessionRef, {
+        'endTime': FieldValue.serverTimestamp(),
+        'status': 'completed',
+        'cost': _currentCost,
+        'paid': paid,
+        'isFreeExit': isFree
+      });
+    });
   }
 
   void _showPaidPopup({String? message}) {
@@ -365,229 +444,550 @@ class _ParkingScreenState extends State<ParkingScreen> {
           if (ctx.mounted) Navigator.of(ctx).pop();
         });
         return AlertDialog(
-          backgroundColor: Colors.green[50],
-          icon: const Icon(Icons.check_circle, size: 60, color: Colors.green),
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20), // Zaokrąglenie samego okienka
+          ),
+          icon: const Icon(Icons.check_circle, size: 60, color: Colors.blue),
           title: const Text("GOTOWE"),
-          content: Text(message ?? "ZAPŁACONE - Możesz wyjechać.", textAlign: TextAlign.center),
+          content: Text(
+            message ?? "ZAPŁACONE - Możesz wyjechać.",
+            textAlign: TextAlign.center,
+          ),
+          actionsAlignment: MainAxisAlignment.center,
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK"))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10), // Odstęp od dołu okna
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue, // Tło niebieskie
+                  foregroundColor: Colors.white, // Tekst biały
+                  // Poniżej kluczowe zmiany dla wyglądu "głównego przycisku":
+                  minimumSize: const Size(200, 50), // Szerokość: 200, Wysokość: 50
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12), // Zaokrąglenie rogów przycisku
+                  ),
+                  textStyle: const TextStyle(
+                    fontSize: 18, // Większa czcionka
+                    fontWeight: FontWeight.bold, // Pogrubienie tekstu
+                  ),
+                  elevation: 5, // Lekki cień pod przyciskiem
+                ),
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text("OK"),
+              ),
+            )
           ],
         );
       },
     );
-  }
+}
 
-  // --- UI GŁÓWNE ---
+  // --- UI ---
 
   @override
   Widget build(BuildContext context) {
     bool isParking = _activeSessionId != null;
 
     return Scaffold(
-      backgroundColor: Colors.grey[100],
-      appBar: AppBar(
-        title: const Text('PARK CHECK', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-        backgroundColor: Colors.white,
-        elevation: 0,
-        centerTitle: true,
-        automaticallyImplyLeading: false,
-        actions: [
-          // --- GUZIK DEBUGOWANIA (PRZEWIJANIE CZASU) ---
-          if (isParking)
-            IconButton(
-              icon: const Icon(Icons.fast_forward, color: Colors.blue),
-              tooltip: "Debug: Dodaj 15 minut",
-              onPressed: _debugAdd15Minutes,
-            ),
-        ],
-      ),
-      body: StreamBuilder<List<ParkingAreaModel>>(
-        stream: _parkingService.getParkingAreas(),
-        builder: (context, snapshotAll) {
-          return StreamBuilder<List<String>>(
-            stream: _parkingService.getUserFavorites(),
-            builder: (context, snapshotFav) {
-              
-              final allSpots = snapshotAll.data ?? [];
-              final favIds = snapshotFav.data ?? [];
+      backgroundColor: const Color(0xFFF2F2F7),
+      resizeToAvoidBottomInset: false, 
+      body: SafeArea(
+        bottom: false, 
+        child: Stack(
+          children: [
+            // TREŚĆ (Listy)
+            StreamBuilder<List<ParkingAreaModel>>(
+              stream: _parkingService.getParkingAreas(), 
+              builder: (context, snapshotAll) {
+                if (snapshotAll.hasError) return const Center(child: Text("Błąd danych parkingów"));
+                
+                final allSpots = snapshotAll.data ?? [];
 
-              ParkingAreaModel? nearestSpot;
-              double distanceToNearest = double.infinity;
+                // Decyzja czy pokazać panel info (potrzebna do paddingu)
+                ParkingAreaModel? nearestForCheck;
+                bool isNearForCheck = false;
+                if (_currentPosition != null && allSpots.isNotEmpty) {
+                   double minDst = double.infinity;
+                   for(var s in allSpots) {
+                     double d = Geolocator.distanceBetween(_currentPosition!.latitude, _currentPosition!.longitude, s.location.latitude, s.location.longitude);
+                     if(d < minDst) {
+                       minDst = d;
+                       nearestForCheck = s;
+                     }
+                   }
+                   if (minDst <= 50) isNearForCheck = true;
+                }
+                
+                // Logika paddingu listy
+                bool showInfoPanel = !isParking && isNearForCheck && nearestForCheck != null;
+                final double contentPaddingBottom = showInfoPanel ? 250.0 : 100.0;
 
-              if (_currentPosition != null && allSpots.isNotEmpty) {
-                var sortedList = List<ParkingAreaModel>.from(allSpots);
-                sortedList.sort((a, b) {
-                  double distA = Geolocator.distanceBetween(_currentPosition!.latitude, _currentPosition!.longitude, a.location.latitude, a.location.longitude);
-                  double distB = Geolocator.distanceBetween(_currentPosition!.latitude, _currentPosition!.longitude, b.location.latitude, b.location.longitude);
-                  return distA.compareTo(distB);
-                });
-                nearestSpot = sortedList.first;
-                distanceToNearest = Geolocator.distanceBetween(
-                  _currentPosition!.latitude, _currentPosition!.longitude, 
-                  nearestSpot.location.latitude, nearestSpot.location.longitude
+                return StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance
+                      .collection('parking_sessions')
+                      .where('status', isEqualTo: 'active')
+                      .snapshots(),
+                  builder: (context, snapshotSessions) {
+                    
+                    Map<String, int> activeCounts = {};
+                    if (snapshotSessions.hasData) {
+                      for (var doc in snapshotSessions.data!.docs) {
+                        final data = doc.data() as Map<String, dynamic>;
+                        final pId = data['parkingId'] as String?;
+                        if (pId != null) {
+                          activeCounts[pId] = (activeCounts[pId] ?? 0) + 1;
+                        }
+                      }
+                    }
+
+                    return StreamBuilder<List<String>>(
+                      stream: _parkingService.getUserFavorites(),
+                      builder: (context, snapshotFav) {
+                        
+                        final favIds = snapshotFav.data ?? [];
+                        List<ParkingAreaModel> sortedSpots = List.from(allSpots);
+
+                        if (_currentPosition != null && sortedSpots.isNotEmpty) {
+                          sortedSpots.sort((a, b) {
+                            double distA = Geolocator.distanceBetween(
+                              _currentPosition!.latitude, _currentPosition!.longitude, 
+                              a.location.latitude, a.location.longitude
+                            );
+                            double distB = Geolocator.distanceBetween(
+                              _currentPosition!.latitude, _currentPosition!.longitude, 
+                              b.location.latitude, b.location.longitude
+                            );
+                            return distA.compareTo(distB);
+                          });
+                        }
+
+                        final favSpots = sortedSpots.where((s) => favIds.contains(s.id)).toList();
+
+                        return SingleChildScrollView(
+                          padding: EdgeInsets.only(left: 16, right: 16, top: 16, bottom: contentPaddingBottom),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _buildHeader(),
+                              const SizedBox(height: 20),
+                              
+                              AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 300),
+                                child: isParking 
+                                  ? _buildActiveSessionCard(isParking)
+                                  : _buildUserCarCard(),
+                              ),
+
+                              const SizedBox(height: 30),
+                              
+                              if (favSpots.isNotEmpty) ...[
+                                _buildSectionTitle("Ulubione parkingi", Icons.favorite, Colors.red),
+                                const SizedBox(height: 12),
+                                _buildHorizontalList(
+                                  favSpots, 
+                                  favIds, 
+                                  isFavoriteList: true,
+                                  activeCounts: activeCounts, 
+                                ),
+                                const SizedBox(height: 24),
+                              ],
+                              
+                              _buildSectionTitle("Parkingi w pobliżu", Icons.wifi_tethering, Colors.black),
+                              const SizedBox(height: 12),
+                              _buildHorizontalList(
+                                sortedSpots, 
+                                favIds, 
+                                isFavoriteList: false,
+                                activeCounts: activeCounts, 
+                              ), 
+                            ],
+                          ),
+                        );
+                      }
+                    );
+                  }
                 );
               }
-              bool isNear = distanceToNearest <= 50;
+            ),
 
-              return Stack(
-                children: [
-                  Positioned.fill(
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.only(bottom: 120),
-                      child: Column(
-                        children: [
-                          const SizedBox(height: 16),
-                          _buildLicensePlateCard(),
-                          
-                          if (isParking) ...[
-                            _buildActiveTimeCard(),
-                          ] else ...[
-                            const SizedBox(height: 20),
-                            _buildFavoritesSection(allSpots, favIds),
-                            const SizedBox(height: 20),
-                            _buildNearestSection(allSpots, favIds),
-                          ],
-                        ],
+            // PŁYWAJĄCE ELEMENTY (STICKY)
+            StreamBuilder<List<ParkingAreaModel>>(
+              stream: _parkingService.getParkingAreas(),
+              builder: (ctx, snap) {
+                List<ParkingAreaModel> spots = snap.data ?? [];
+                ParkingAreaModel? nearestForButton;
+                bool isNear = false;
+
+                if (_currentPosition != null && spots.isNotEmpty) {
+                  spots.sort((a, b) {
+                     double distA = Geolocator.distanceBetween(_currentPosition!.latitude, _currentPosition!.longitude, a.location.latitude, a.location.longitude);
+                     double distB = Geolocator.distanceBetween(_currentPosition!.latitude, _currentPosition!.longitude, b.location.latitude, b.location.longitude);
+                     return distA.compareTo(distB);
+                  });
+                  nearestForButton = spots.first;
+                  double dist = Geolocator.distanceBetween(_currentPosition!.latitude, _currentPosition!.longitude, nearestForButton.location.latitude, nearestForButton.location.longitude);
+                  isNear = dist <= 50; 
+                }
+
+                bool showInfoPanel = !isParking && isNear && nearestForButton != null;
+
+                return Stack(
+                  children: [
+                    // A. PANEL INFO
+                    if (showInfoPanel)
+                      Positioned(
+                        left: 16,
+                        right: 16,
+                        bottom: 96, 
+                        child: _buildNearestSpotInfo(nearestForButton!),
                       ),
-                    ),
-                  ),
 
-                  Positioned(
-                    bottom: 20,
-                    left: 16,
-                    right: 16,
-                    child: _buildMainActionButton(isParking, isNear, nearestSpot),
-                  ),
-                ],
-              );
-            },
-          );
-        },
+                    // B. GUZIK
+                    Positioned(
+                      bottom: 16, 
+                      left: 16,
+                      right: 16,
+                      child: _buildMainActionButton(isParking, isNear, nearestForButton),
+                    ),
+                  ],
+                );
+              }
+            )
+          ],
+        ),
       ),
     );
   }
 
-  // --- WIDGETY SKŁADOWE ---
+  // --- WIDGETY POMOCNICZE ---
 
-  Widget _buildLicensePlateCard() {
+  Widget _buildHeader() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: const BoxDecoration(color: Color(0xFF007AFF), shape: BoxShape.circle),
+              child: const Icon(Icons.check, color: Colors.white, size: 20),
+            ),
+            const SizedBox(width: 10),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text("PARK", style: TextStyle(color: Color(0xFF007AFF), fontWeight: FontWeight.w900, fontSize: 18, height: 1)),
+                Text("CHECK", style: TextStyle(color: Color(0xFF007AFF), fontWeight: FontWeight.w900, fontSize: 18, height: 1)),
+              ],
+            )
+          ],
+        ),
+        if (_activeSessionId != null)
+          IconButton(
+            icon: const Icon(Icons.fast_forward, color: Colors.grey),
+            tooltip: "Debug: Dodaj 15 min",
+            onPressed: _debugAdd15Minutes,
+          ),
+      ],
+    );
+  }
+
+  Widget _buildNearestSpotInfo(ParkingAreaModel spot) {
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16),
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.blue.shade800,
+        color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.blue.withOpacity(0.3), blurRadius: 10, offset: const Offset(0,5))],
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 15, offset: const Offset(0, 5))
+        ],
+        border: Border.all(color: const Color(0xFF007AFF), width: 1.5),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('TWÓJ POJAZD', style: TextStyle(color: Colors.white70, fontSize: 12, letterSpacing: 1.5)),
-          const SizedBox(height: 5),
+          Row(
+            children: [
+              const Icon(Icons.pin_drop, color: Color(0xFF007AFF), size: 20),
+              const SizedBox(width: 8),
+              const Text("TU ZAPARKUJESZ:", style: TextStyle(color: Color(0xFF007AFF), fontWeight: FontWeight.bold, fontSize: 12)),
+            ],
+          ),
+          const SizedBox(height: 8),
           Text(
-            _myLicensePlate,
-            style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold, letterSpacing: 2),
+            spot.name, 
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+            maxLines: 1, 
+            overflow: TextOverflow.ellipsis
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              const Icon(Icons.location_on_outlined, size: 14, color: Colors.grey),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  spot.address,
+                  style: const TextStyle(color: Colors.grey, fontSize: 14),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  Widget _buildActiveTimeCard() {
+  Widget _buildUserCarCard() {
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-      width: double.infinity,
+      key: const ValueKey('CarCard'),
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.green, width: 2),
-        boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 10)],
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 15, offset: const Offset(0, 5))],
       ),
-      child: Column(
+      child: Row(
         children: [
-          Text("PARKING: ${_activeParking?.name ?? '...'}", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-          const Divider(),
-          Text(_elapsedTimeStr, style: const TextStyle(fontSize: 48, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
-          const SizedBox(height: 10),
-          Text("Koszt: ${_currentCost.toStringAsFixed(2)} zł", style: const TextStyle(fontSize: 20, color: Colors.blue, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 5),
-          const Text("(Pierwsze 5 min gratis)", style: TextStyle(color: Colors.grey, fontSize: 12)),
+          Container(
+            width: 60, height: 60,
+            decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: const Color(0xFF007AFF), width: 2)),
+            child: const Icon(Icons.directions_car, color: Color(0xFF007AFF), size: 30),
+          ),
+          const Spacer(),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              const Text("TWOJE AUTO", style: TextStyle(color: Color(0xFF007AFF), fontWeight: FontWeight.bold, fontSize: 12)),
+              const SizedBox(height: 5),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(8)),
+                child: Row(
+                  children: [
+                    Text("nr rej. ", style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+                    Text(_myLicensePlate.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                  ],
+                ),
+              ),
+            ],
+          )
         ],
       ),
     );
   }
 
-  Widget _buildFavoritesSection(List<ParkingAreaModel> allSpots, List<String> favIds) {
-    final favSpots = allSpots.where((s) => favIds.contains(s.id)).toList();
-    if (favSpots.isEmpty) return const SizedBox.shrink();
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(children: [
-            Icon(Icons.favorite, color: Colors.red, size: 20),
-            SizedBox(width: 8),
-            Text("ULUBIONE", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey))
-          ]),
-          const SizedBox(height: 10),
-          ...favSpots.map((spot) => _buildParkingCard(spot, true)).toList(),
-        ],
+  Widget _buildActiveSessionCard(bool isParking) {
+    return Container(
+      key: const ValueKey('TimerCard'),
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0xFF007AFF).withOpacity(0.3)),
+        boxShadow: [BoxShadow(color: const Color(0xFF007AFF).withOpacity(0.1), blurRadius: 15, offset: const Offset(0, 5))],
+      ),
+      child: IntrinsicHeight( 
+        child: Row(
+          children: [
+            Expanded(
+              flex: 5, 
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.watch_later_outlined, color: Color(0xFF007AFF), size: 24),
+                        const SizedBox(width: 8),
+                        Text(
+                          _elapsedTimeStr,
+                          style: const TextStyle(
+                            fontSize: 22, 
+                            fontWeight: FontWeight.w400,
+                            color: Color(0xFF007AFF), 
+                            fontFeatures: [FontFeature.tabularFigures()]
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    const Text("DO ZAPŁATY", style: TextStyle(fontSize: 10, color: Colors.grey, fontWeight: FontWeight.bold)),
+                    Text(
+                      "${_currentCost.toStringAsFixed(2)} zł",
+                      style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.black),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            VerticalDivider(color: Colors.grey.shade200, thickness: 1, width: 1),
+            Expanded(
+              flex: 4,
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Text("PARKUJESZ NA:", style: TextStyle(fontSize: 10, color: Colors.grey, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Text(
+                      _activeParking?.name ?? "...",
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _activeParking?.address ?? "...",
+                      style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildNearestSection(List<ParkingAreaModel> allSpots, List<String> favIds) {
-    if (_currentPosition == null) {
-      return const Center(child: Text("Szukanie lokalizacji..."));
+  Widget _buildSectionTitle(String title, IconData icon, Color iconColor) {
+    return Row(
+      children: [
+        Icon(icon, color: iconColor, size: 24),
+        const SizedBox(width: 8),
+        Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Color(0xFF333333))),
+      ],
+    );
+  }
+
+  Widget _buildHorizontalList(
+    List<ParkingAreaModel> spots, 
+    List<String> favIds, 
+    {required bool isFavoriteList, required Map<String, int> activeCounts}) {
+      
+    if (spots.isEmpty) {
+      return SizedBox(
+        height: 50,
+        child: Center(child: Text(isFavoriteList ? "" : "Brak parkingów w pobliżu")),
+      );
     }
 
-    var sorted = List<ParkingAreaModel>.from(allSpots);
-    sorted.sort((a, b) {
-      double dA = Geolocator.distanceBetween(_currentPosition!.latitude, _currentPosition!.longitude, a.location.latitude, a.location.longitude);
-      double dB = Geolocator.distanceBetween(_currentPosition!.latitude, _currentPosition!.longitude, b.location.latitude, b.location.longitude);
-      return dA.compareTo(dB);
-    });
-    final top3 = sorted.take(3).toList();
+    return SizedBox(
+      height: 110,
+      child: ListView.separated(
+        key: ValueKey('list_${isFavoriteList ? "fav" : "near"}_${spots.length}'), 
+        scrollDirection: Axis.horizontal,
+        clipBehavior: Clip.none,
+        itemCount: spots.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 15),
+        itemBuilder: (context, index) {
+          final spot = spots[index];
+          final isFav = favIds.contains(spot.id);
+          final int realOccupancy = activeCounts[spot.id] ?? 0;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text("W POBLIŻU", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
-          const SizedBox(height: 10),
-          ...top3.map((spot) => _buildParkingCard(spot, favIds.contains(spot.id))).toList(),
-        ],
-      ),
-    );
-  }
+          String distanceText = "";
+          if (_currentPosition != null) {
+            double dist = Geolocator.distanceBetween(
+              _currentPosition!.latitude, _currentPosition!.longitude, 
+              spot.location.latitude, spot.location.longitude
+            );
+            distanceText = _formatDistance(dist);
+          }
 
-  Widget _buildParkingCard(ParkingAreaModel spot, bool isFav) {
-    double? km;
-    if (_currentPosition != null) {
-      km = Geolocator.distanceBetween(_currentPosition!.latitude, _currentPosition!.longitude, spot.location.latitude, spot.location.longitude) / 1000;
-    }
+          // --- LOGIKA KOLORÓW DLA ZAJĘTOŚCI ---
+          Color occupancyColor;
+          double ratio = spot.totalCapacity > 0 ? realOccupancy / spot.totalCapacity : 0.0;
 
-    return Card(
-      elevation: 0,
-      color: Colors.white,
-      margin: const EdgeInsets.only(bottom: 10),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: ListTile(
-        contentPadding: const EdgeInsets.all(10),
-        leading: Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(8)),
-          child: const Icon(Icons.local_parking, color: Colors.blue),
-        ),
-        title: Text(spot.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Text(km != null ? "${km.toStringAsFixed(2)} km • ${spot.pricePerHour} zł/h" : "${spot.pricePerHour} zł/h"),
-        trailing: IconButton(
-          icon: Icon(isFav ? Icons.favorite : Icons.favorite_border, color: isFav ? Colors.red : Colors.grey),
-          onPressed: () => _parkingService.toggleFavorite(spot.id),
-        ),
+          if (ratio >= 0.9) {
+            occupancyColor = Colors.red;
+          } else if (ratio >= 0.5) {
+            occupancyColor = Colors.amber[800]!; // Żółty/Pomarańczowy (czytelniejszy na białym)
+          } else {
+            occupancyColor = const Color(0xFF007AFF); // Niebieski (Domyślny)
+          }
+
+          return Container(
+            width: 280,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 5, offset: const Offset(0, 2))],
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 80,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFD0E6FF),
+                    borderRadius: BorderRadius.horizontal(left: Radius.circular(16)),
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.access_time, color: Color(0xFF007AFF)),
+                      const SizedBox(height: 5),
+                      Text("${spot.pricePerHour}zł/h", style: const TextStyle(color: Color(0xFF007AFF), fontWeight: FontWeight.bold, fontSize: 12)),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Expanded(child: Text(spot.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15), maxLines: 1, overflow: TextOverflow.ellipsis)),
+                            GestureDetector(
+                              onTap: () => _parkingService.toggleFavorite(spot.id),
+                              child: Icon(isFav ? Icons.favorite : Icons.favorite_border, size: 18, color: isFav ? Colors.red : Colors.grey),
+                            )
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(spot.address, style: const TextStyle(color: Colors.grey, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+                        const SizedBox(height: 8),
+                        
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            if (distanceText.isNotEmpty)
+                              Row(
+                                children: [
+                                  Icon(Icons.near_me, size: 12, color: Colors.grey[600]),
+                                  const SizedBox(width: 4),
+                                  Text(distanceText, style: TextStyle(color: Colors.grey[600], fontSize: 12, fontWeight: FontWeight.bold)),
+                                ],
+                              )
+                            else 
+                              const SizedBox(), 
+
+                            Text(
+                              "$realOccupancy / ${spot.totalCapacity}", 
+                              style: TextStyle(color: occupancyColor, fontWeight: FontWeight.bold, fontSize: 12),
+                            ),
+                          ],
+                        )
+                      ],
+                    ),
+                  ),
+                )
+              ],
+            ),
+          );
+        },
       ),
     );
   }
@@ -599,10 +999,13 @@ class _ParkingScreenState extends State<ParkingScreen> {
     bool isDisabled = false;
 
     if (_isLoadingAction) {
-      return Container(
+       return SizedBox(
         height: 70,
-        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), boxShadow: const [BoxShadow(blurRadius: 10, color: Colors.black12)]),
-        child: const Center(child: CircularProgressIndicator()),
+        child: ElevatedButton(
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+          onPressed: () {}, 
+          child: const CircularProgressIndicator()
+        ),
       );
     }
 
@@ -611,52 +1014,52 @@ class _ParkingScreenState extends State<ParkingScreen> {
         text = _paymentStatusText;
         bgColor = Colors.red;
         action = _stopAndPay;
+      } else if (_currentCost == 0.0) {
+        text = "ZAKOŃCZ BEZPŁATNIE";
+        bgColor = Colors.green;
+        action = _stopAndPay; 
       } else {
-        // --- LOGIKA BLOKADY ---
-        if (_currentCost == 0.0) {
-          // Darmowe 5 min -> Można wyjść
-          text = "ZAKOŃCZ BEZPŁATNIE";
-          bgColor = Colors.green;
-          action = _stopAndPay;
-        } else if (_currentCost > 0.0 && _currentCost < 2.00) {
-          // Koszt między 0.01 a 1.99 -> BLOKADA
-          text = "MINIMUM 2 ZŁ (${_currentCost.toStringAsFixed(2)})";
-          bgColor = Colors.grey;
-          isDisabled = true;
-          action = null;
-        } else {
-          // Powyżej 2 zł -> PŁAĆ
-          text = "ZATRZYMAJ I ZAPŁAĆ";
-          bgColor = Colors.red;
-          action = _stopAndPay;
-        }
+        text = "ZAKOŃCZ I ZAPŁAĆ";
+        bgColor = Colors.redAccent;
+        action = _stopAndPay;
       }
     } else {
       if (isNear && nearestSpot != null) {
-        text = "ROZPOCZNIJ PARKOWANIE\n(${nearestSpot.name})";
-        bgColor = Colors.green;
-        action = () => _startParkingSession(nearestSpot!);
+        text = "ROZPOCZNIJ PARKOWANIE"; 
+        bgColor = const Color(0xFF007AFF);
+        action = () => _startParkingSession(nearestSpot);
       } else {
-        text = "NIE JESTEŚ W POBLIŻU\n(Podjedź na 50m)";
-        bgColor = Colors.orange;
+        text = "PODJEDŹ BLIŻEJ PARKINGU";
+        bgColor = Colors.grey;
         isDisabled = true;
-        action = null; 
+        action = null;
       }
     }
 
     return SizedBox(
       width: double.infinity,
-      height: 75,
+      height: 70,
       child: ElevatedButton(
-        onPressed: action,
         style: ElevatedButton.styleFrom(
           backgroundColor: bgColor,
           foregroundColor: Colors.white,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          elevation: isDisabled ? 0 : 5,
-          padding: const EdgeInsets.symmetric(vertical: 10),
+          elevation: isDisabled ? 0 : 8,
+          padding: const EdgeInsets.symmetric(horizontal: 20),
         ),
-        child: Text(text, textAlign: TextAlign.center, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        onPressed: action,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(isParking ? Icons.payment : Icons.local_parking, size: 28),
+            const SizedBox(width: 12),
+            Text(
+              text,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
       ),
     );
   }

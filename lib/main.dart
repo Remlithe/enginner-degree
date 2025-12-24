@@ -3,9 +3,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:parkcheck/widgets/auth_gate.dart';
 import 'package:parkcheck/firebase_options.dart';
 import 'package:flutter_stripe/flutter_stripe.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 
-import 'package:flutter/services.dart';
 
 
 

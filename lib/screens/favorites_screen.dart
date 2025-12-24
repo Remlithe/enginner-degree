@@ -1,7 +1,8 @@
+import 'package:cloud_firestore/cloud_firestore.dart'; // Dodano import Firestore
 import 'package:flutter/material.dart';
 import '../models/parking_area_model.dart';
 import '../services/parking_service.dart';
-import '../widgets/occupancy_bar.dart'; // Import paska, który stworzyliśmy
+import '../widgets/occupancy_bar.dart';
 
 class FavoritesScreen extends StatefulWidget {
   const FavoritesScreen({super.key});
@@ -16,7 +17,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[50], // Jasne tło jak na projekcie
+      backgroundColor: Colors.grey[50],
       appBar: AppBar(
         title: const Text(
           'Ulubione parkingi',
@@ -25,43 +26,70 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
         centerTitle: true,
         backgroundColor: Colors.transparent,
         elevation: 0,
-        automaticallyImplyLeading: false, // Usuwa strzałkę wstecz
+        automaticallyImplyLeading: false,
       ),
+      // 1. Pobieramy listę parkingów
       body: StreamBuilder<List<ParkingAreaModel>>(
         stream: _parkingService.getParkingAreas(),
         builder: (context, snapshotParking) {
+          // 2. Pobieramy listę ulubionych ID
           return StreamBuilder<List<String>>(
             stream: _parkingService.getUserFavorites(),
             builder: (context, snapshotFavs) {
-              
-              if (!snapshotParking.hasData || !snapshotFavs.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
+              // 3. <<< NOWOŚĆ: Pobieramy aktywne sesje (tak jak w ParkingScreen) >>>
+              return StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('parking_sessions')
+                    .where('status', isEqualTo: 'active')
+                    .snapshots(),
+                builder: (context, snapshotSessions) {
+                  
+                  if (!snapshotParking.hasData || !snapshotFavs.hasData) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
 
-              final allSpots = snapshotParking.data!;
-              final favIds = snapshotFavs.data!;
-              
-              // Filtrujemy listę, zostawiając tylko ulubione
-              final favSpots = allSpots.where((s) => favIds.contains(s.id)).toList();
+                  // <<< OBLICZANIE ZAJĘTOŚCI NA ŻYWO >>>
+                  Map<String, int> activeCounts = {};
+                  if (snapshotSessions.hasData) {
+                    for (var doc in snapshotSessions.data!.docs) {
+                      final data = doc.data() as Map<String, dynamic>;
+                      final pId = data['parkingId'] as String?;
+                      if (pId != null) {
+                        activeCounts[pId] = (activeCounts[pId] ?? 0) + 1;
+                      }
+                    }
+                  }
+                  // <<< KONIEC OBLICZEŃ >>>
 
-              if (favSpots.isEmpty) {
-                return Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.favorite_border, size: 60, color: Colors.grey.shade300),
-                      const SizedBox(height: 10),
-                      Text('Brak ulubionych parkingów', style: TextStyle(color: Colors.grey.shade500)),
-                    ],
-                  ),
-                );
-              }
+                  final allSpots = snapshotParking.data!;
+                  final favIds = snapshotFavs.data!;
+                  
+                  final favSpots = allSpots.where((s) => favIds.contains(s.id)).toList();
 
-              return ListView.builder(
-                padding: const EdgeInsets.all(16),
-                itemCount: favSpots.length,
-                itemBuilder: (context, index) {
-                  return _buildFavoriteCard(favSpots[index]);
+                  if (favSpots.isEmpty) {
+                    return Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.favorite_border, size: 60, color: Colors.grey.shade300),
+                          const SizedBox(height: 10),
+                          Text('Brak ulubionych parkingów', style: TextStyle(color: Colors.grey.shade500)),
+                        ],
+                      ),
+                    );
+                  }
+
+                  return ListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: favSpots.length,
+                    itemBuilder: (context, index) {
+                      final spot = favSpots[index];
+                      // Pobieramy prawdziwą liczbę z naszej mapy, a nie z modelu!
+                      final realOccupancy = activeCounts[spot.id] ?? 0;
+                      
+                      return _buildFavoriteCard(spot, realOccupancy);
+                    },
+                  );
                 },
               );
             },
@@ -71,8 +99,8 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
     );
   }
 
-  // Budowa pojedynczej karty (Wzorowana na Twoim obrazku)
-  Widget _buildFavoriteCard(ParkingAreaModel spot) {
+  // Zaktualizowałem argumenty funkcji o int currentOccupancy
+  Widget _buildFavoriteCard(ParkingAreaModel spot, int currentOccupancy) {
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
@@ -86,15 +114,14 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
           )
         ],
       ),
-      child: IntrinsicHeight( // Ważne: pozwala niebieskiemu paskowi rozciągnąć się na wysokość
+      child: IntrinsicHeight( 
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // --- LEWA STRONA (Niebieski pasek z ceną) ---
             Container(
               width: 80,
               decoration: BoxDecoration(
-                color: Colors.blue.shade100.withOpacity(0.5), // Jasny niebieski
+                color: Colors.blue.shade100.withOpacity(0.5), 
                 borderRadius: const BorderRadius.only(
                   topLeft: Radius.circular(16),
                   bottomLeft: Radius.circular(16),
@@ -118,14 +145,12 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
               ),
             ),
             
-            // --- ŚRODEK (Informacje) ---
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Górny rząd: Nazwa + Kosz
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -140,15 +165,33 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        // Ikona kosza (Usuwanie)
                         InkWell(
-                          onTap: () => _parkingService.toggleFavorite(spot.id),
-                          child: const Icon(Icons.delete_outline, color: Colors.blue, size: 20),
+                          onTap: () async {
+                            await _parkingService.toggleFavorite(spot.id);
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text("Usunięto ${spot.name} z ulubionych"),
+                                  duration: const Duration(minutes: 1),
+                                  behavior: SnackBarBehavior.floating,
+                                  margin: const EdgeInsets.all(10),
+                                  action: SnackBarAction(
+                                    label: "COFNIJ",
+                                    textColor: Colors.yellow,
+                                    onPressed: () {
+                                      _parkingService.toggleFavorite(spot.id);
+                                    },
+                                  ),
+                                ),
+                              );
+                            }
+                          },
+                          child: const Icon(Icons.delete_outline, color: Colors.red, size: 24),
                         ),
                       ],
                     ),
                     const SizedBox(height: 4),
-                    // Adres
                     Text(
                       spot.address,
                       style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
@@ -156,8 +199,9 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
                     const SizedBox(height: 16),
                     
                     // --- PASEK POSTĘPU ---
+                    // Tutaj przekazujemy obliczoną wartość "currentOccupancy" zamiast tej z bazy "spot.occupiedSpots"
                     OccupancyBar(
-                      occupied: spot.occupiedSpots,
+                      occupied: currentOccupancy, // <<< UŻYWAMY DANYCH LIVE
                       capacity: spot.totalCapacity,
                     ),
                   ],
